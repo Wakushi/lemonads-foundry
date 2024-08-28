@@ -2,5 +2,19 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+remappings = ["@chainlink/contracts=lib/chainlink/contracts", "@solmate/=lib/solmate/src/"]
+ffi = true
+fs_permissions = [{ access = "read", path = "./" }]
+optimizer = true
+optimizer_runs = 200
+solc_version = "0.8.20"
+evm_version = 'paris'
+
+[etherscan]
+polygon-amoy = { key = "${POLYGON_AMOY_API_KEY}", url = "https://www.oklink.com/api/explorer/v1/contract/verify/async/api/polygonAmoy" }
+
+[rpc_endpoints]
+polygon-amoy = "${POLYGON_AMOY_RPC_URL}"
+
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
