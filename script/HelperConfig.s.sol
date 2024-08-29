@@ -27,9 +27,25 @@ contract HelperConfig is Script {
     constructor() {
         if (block.chainid == 80002) {
             activeNetworkConfig = getPolygonAmoyConfig();
+        } else if (block.chainid == 84532) {
+            activeNetworkConfig = getBaseSepoliaConfig();
         } else {
             activeNetworkConfig = getOrCreateAnvilEthConfig();
         }
+    }
+
+    function getBaseSepoliaConfig() public pure returns (NetworkConfig memory) {
+        return
+            NetworkConfig({
+                donId: bytes32("fun-base-sepolia-1"),
+                functionsRouter: 0xf9B8fc078197181C841c296C876945aaa425B278,
+                nativeUsdPriceFeed: 0x001382149eBa3441043c1c66972b4772963f5D43,
+                usdcPriceFeed: 0x1b8739bB4CdF0089d07097A9Ae5Bd274b29C6F16,
+                functionsSubId: 162,
+                ccipRouterAddress: 0x9C32fCB86BF0f4a1A8921a9Fe46de3198bb884B2,
+                linkTokenAddress: 0xE4aB69C077896252FAFBD49EFD26B5D171A32410,
+                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582
+            });
     }
 
     function getPolygonAmoyConfig() public pure returns (NetworkConfig memory) {

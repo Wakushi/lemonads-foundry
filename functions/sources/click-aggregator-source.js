@@ -3,6 +3,10 @@ const abiCoder = ethers.AbiCoder.defaultAbiCoder()
 
 const timestamp = args[0]
 
+await Functions.makeHttpRequest({
+  url: `https://lemonads.vercel.app/api/ping`,
+})
+
 const { data } = await Functions.makeHttpRequest({
   url: `https://lemonads.vercel.app/api/ad/clicks?timestamp=${timestamp}`,
 })

@@ -21,7 +21,7 @@ contract Lemonads is FunctionsClient {
         bool active; // Is this parcel still active
     }
 
-    struct ClickPerAd {
+    struct ClicksPerAd {
         uint256 adParcelId;
         uint256 clicks;
     }
@@ -34,7 +34,7 @@ contract Lemonads is FunctionsClient {
     mapping(uint256 adParcelId => AdParcel) private s_adParcels;
 
     // Mapping to store the aggregated amount of clicks per ad parcel
-    mapping(uint256 adParcelId => uint256 clicks) private s_clickPerAdParcel;
+    mapping(uint256 adParcelId => uint256 clicks) private s_clicksPerAdParcel;
 
     // Mapping from owner to array of owned parcel IDs
     mapping(address => uint256[]) private s_ownerParcels;
@@ -66,6 +66,7 @@ contract Lemonads is FunctionsClient {
 
     uint256 s_lastCronExecutionTime;
 
+    // Errors
     error Lemonads__ParcelAlreadyCreatedAtId(uint256 parcelId);
     error Lemonads__ParcelNotFound();
     error Lemonads__UnsufficientFundsLocked();
@@ -95,6 +96,12 @@ contract Lemonads is FunctionsClient {
     event ChainlinkRequestSent(bytes32 requestId);
     event ClickAggregated(bytes32 requestId);
     event ParcelPaymentFailed(uint256 adParcelId);
+    event RenterRemovedFromParcel(uint256 adParcelId);
+    event AdParcelPaid(
+        uint256 indexed adParcelId,
+        address indexed renter,
+        uint256 indexed renterFunds
+    );
 
     modifier onlyAdParcelOwner(uint256 _parcelId) {
         _ensureAdParcelOwnership(_parcelId);
@@ -152,7 +159,7 @@ contract Lemonads is FunctionsClient {
             revert Lemonads__ParcelNotFound();
         }
 
-        if (_newBid < adParcel.bid) {
+        if (_newBid < adParcel.bid || _newBid < adParcel.minBid) {
             revert Lemonads__BidLowerThanCurrent();
         }
 
@@ -244,7 +251,7 @@ contract Lemonads is FunctionsClient {
         adParcel.websiteInfoHash = "";
     }
 
-    function runClickAggregatorCron() external {
+    function aggregateClicks() external {
         if (
             block.timestamp <
             s_lastCronExecutionTime + MIN_INTERVAL_BETWEEN_CRON
@@ -252,7 +259,7 @@ contract Lemonads is FunctionsClient {
             revert Lemonads__NotEnoughTimePassed();
         }
 
-        string[] memory requestArgs;
+        string[] memory requestArgs = new string[](1);
 
         requestArgs[0] = s_lastCronExecutionTime.toString();
 
@@ -261,6 +268,7 @@ contract Lemonads is FunctionsClient {
         _generateSendRequest(requestArgs, s_clickAggregatorSource);
     }
 
+    // Triggered manually or using log based automation
     function payParcelOwners() external {
         if (s_payableParcels.length == 0) {
             revert Lemonads__NoPayableParcel();
@@ -269,15 +277,58 @@ contract Lemonads is FunctionsClient {
         uint256[] memory payableParcels = s_payableParcels;
 
         for (uint256 i = 0; i < payableParcels.length; i++) {
+            // Retrieve the ad parcel ID
             uint256 adParcelId = payableParcels[i];
 
-            uint256 clickAggregated = s_clickPerAdParcel[adParcelId];
+            // Get clicks amount aggregated (by fulfillRequest()) for that parcel
+            uint256 clicksAggregated = s_clicksPerAdParcel[adParcelId];
 
             AdParcel storage adParcel = s_adParcels[adParcelId];
 
-            uint256 amountDue = adParcel.bid * clickAggregated;
+            // Get the amount due for all clicks * price per click (bid)
+            uint256 amountDue = adParcel.bid * clicksAggregated;
 
-            s_clickPerAdParcel[adParcelId] = 0;
+            // Get the ETH amount locked by the renter
+            uint256 renterFunds = s_renterFunds[adParcel.renter];
+
+            // We calculate the new fund amount expected after payment
+            uint256 newExpectedFundAmount;
+
+            // If the renter owes more than he had locked
+            if (amountDue > renterFunds) {
+                // Everything he has left will be sent as payment
+                amountDue = renterFunds;
+                s_renterFunds[adParcel.renter] = 0;
+
+                // We remove him from the parcel (+ reputation system ?)
+                _freeParcel(adParcelId);
+
+                emit RenterRemovedFromParcel(adParcelId);
+            } else {
+                // Calculate what's going to remains of renter's funds
+                newExpectedFundAmount = renterFunds - amountDue;
+
+                // Deduct the funds
+                s_renterFunds[adParcel.renter] -= amountDue;
+
+                // If new fund amount is lower than a certain point, also free the parcel
+                if (
+                    newExpectedFundAmount <
+                    adParcel.bid * MIN_CLICK_AMOUNT_COVERED
+                ) {
+                    _freeParcel(adParcelId);
+
+                    emit RenterRemovedFromParcel(adParcelId);
+                }
+
+                emit AdParcelPaid(
+                    adParcelId,
+                    adParcel.renter,
+                    newExpectedFundAmount
+                );
+            }
+
+            s_clicksPerAdParcel[adParcelId] = 0;
 
             (bool success, ) = adParcel.owner.call{value: amountDue}("");
 
@@ -292,6 +343,14 @@ contract Lemonads is FunctionsClient {
     ////////////////////
     // Internal
     ////////////////////
+
+    function _freeParcel(uint256 _adParcelId) internal {
+        AdParcel storage adParcel = s_adParcels[_adParcelId];
+        adParcel.renter = address(0);
+        adParcel.bid = 0;
+        adParcel.contentHash = "";
+        _removeAdRentedParcel(adParcel.renter, _adParcelId);
+    }
 
     function _generateSendRequest(
         string[] memory args,
@@ -315,21 +374,31 @@ contract Lemonads is FunctionsClient {
         return s_lastRequestId;
     }
 
+    /**
+     * @notice Receives the aggregated data computed on the click-aggregator-source.js,
+     * as tuple array of ClicksPerAd structs. It runs through the array and increments
+     * the click amount for concerned ad parcels. It also adds the parcel that were clicked
+     * to an array of payable parcels (to be treated by payParcelOwners())
+     */
     function fulfillRequest(
         bytes32 requestId,
         bytes memory response,
         bytes memory err
     ) internal override {
-        ClickPerAd[] memory clickPerAds = abi.decode(response, (ClickPerAd[]));
+        ClicksPerAd[] memory clicksPerAds = abi.decode(
+            response,
+            (ClicksPerAd[])
+        );
 
-        for (uint256 i = 0; i < clickPerAds.length; i++) {
-            uint256 adParcelId = clickPerAds[i].adParcelId;
-            s_clickPerAdParcel[adParcelId] += clickPerAds[i].clicks;
+        for (uint256 i = 0; i < clicksPerAds.length; i++) {
+            uint256 adParcelId = clicksPerAds[i].adParcelId;
+            s_clicksPerAdParcel[adParcelId] += clicksPerAds[i].clicks;
             s_payableParcels.push(adParcelId);
         }
 
         s_lastRequestIdFulfilled = requestId;
-        emit ClickAggregated(requestId);
+
+        emit ClickAggregated(requestId); // Triggers log based automation ?
     }
 
     // Internal function to remove a parcel from the renter's list
@@ -412,10 +481,14 @@ contract Lemonads is FunctionsClient {
     function getClickPerAdParcel(
         uint256 _adParcelId
     ) external view returns (uint256) {
-        return s_clickPerAdParcel[_adParcelId];
+        return s_clicksPerAdParcel[_adParcelId];
     }
 
     function getPayableAdParcels() external view returns (uint256[] memory) {
         return s_payableParcels;
+    }
+
+    function getLastCronTimestamp() external view returns (uint256) {
+        return s_lastCronExecutionTime;
     }
 }
