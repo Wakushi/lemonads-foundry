@@ -2,7 +2,14 @@
 
 pragma solidity ^0.8.20;
 
-contract Lemonads {
+import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
+import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+
+contract Lemonads is FunctionsClient {
+    using FunctionsRequest for FunctionsRequest.Request;
+    using Strings for uint256;
+
     struct AdParcel {
         uint256 bid; // Current highest bid for the ad parcel
         uint256 minBid; // Minimum bid required for the ad parcel
@@ -14,22 +21,50 @@ contract Lemonads {
         bool active; // Is this parcel still active
     }
 
-    uint public constant MIN_CLICK_AMOUNT_COVERED = 10;
+    struct ClickPerAd {
+        uint256 adParcelId;
+        uint256 clicks;
+    }
+
+    uint256 public constant MIN_CLICK_AMOUNT_COVERED = 10;
+
+    uint256 public constant MIN_INTERVAL_BETWEEN_CRON = 1 days;
 
     // Mapping to store ad parcels by their ID
-    mapping(uint256 => AdParcel) private adParcels;
+    mapping(uint256 adParcelId => AdParcel) private s_adParcels;
+
+    // Mapping to store the aggregated amount of clicks per ad parcel
+    mapping(uint256 adParcelId => uint256 clicks) private s_clickPerAdParcel;
 
     // Mapping from owner to array of owned parcel IDs
-    mapping(address => uint256[]) private ownerParcels;
+    mapping(address => uint256[]) private s_ownerParcels;
 
     // Mapping from renter to array of rented parcel IDs
-    mapping(address => uint256[]) private renterParcels;
+    mapping(address => uint256[]) private s_renterParcels;
 
     // Mapping to store locked funds for each renter
-    mapping(address => uint256) private renterFunds;
+    mapping(address => uint256) private s_renterFunds;
 
     // Global array to store all parcel IDs
-    uint256[] private allParcels;
+    uint256[] private s_allParcels;
+
+    // Parcel expecting payments
+    uint256[] private s_payableParcels;
+
+    // Chainlink Functions
+    bytes32 s_donID;
+
+    uint32 s_gasLimit = 300000;
+
+    uint64 s_functionsSubId;
+
+    string s_clickAggregatorSource;
+
+    bytes32 s_lastRequestId;
+
+    bytes32 s_lastRequestIdFulfilled;
+
+    uint256 s_lastCronExecutionTime;
 
     error Lemonads__ParcelAlreadyCreatedAtId(uint256 parcelId);
     error Lemonads__ParcelNotFound();
@@ -38,6 +73,8 @@ contract Lemonads {
     error Lemonads__TransferFailed();
     error Lemonads__BidLowerThanCurrent();
     error Lemonads__NotParcelOwner();
+    error Lemonads__NotEnoughTimePassed();
+    error Lemonads__NoPayableParcel();
 
     // Events
     event AdParcelCreated(
@@ -55,10 +92,24 @@ contract Lemonads {
     );
     event FundsAdded(address indexed renter, uint256 amount);
     event FundsWithdrawn(address indexed renter, uint256 amount);
+    event ChainlinkRequestSent(bytes32 requestId);
+    event ClickAggregated(bytes32 requestId);
+    event ParcelPaymentFailed(uint256 adParcelId);
 
     modifier onlyAdParcelOwner(uint256 _parcelId) {
         _ensureAdParcelOwnership(_parcelId);
         _;
+    }
+
+    constructor(
+        address _functionsRouter,
+        bytes32 _donId,
+        uint64 _functionsSubId,
+        string memory _clickAggregatorSource
+    ) FunctionsClient(_functionsRouter) {
+        s_donID = _donId;
+        s_functionsSubId = _functionsSubId;
+        s_clickAggregatorSource = _clickAggregatorSource;
     }
 
     // Function to create a new ad parcel
@@ -68,11 +119,11 @@ contract Lemonads {
         string calldata _traitsHash,
         string calldata _websiteInfoHash
     ) external {
-        if (adParcels[_parcelId].owner != address(0)) {
+        if (s_adParcels[_parcelId].owner != address(0)) {
             revert Lemonads__ParcelAlreadyCreatedAtId(_parcelId);
         }
 
-        adParcels[_parcelId] = AdParcel({
+        s_adParcels[_parcelId] = AdParcel({
             bid: 0,
             minBid: _minBid,
             owner: msg.sender,
@@ -83,8 +134,8 @@ contract Lemonads {
             contentHash: ""
         });
 
-        ownerParcels[msg.sender].push(_parcelId);
-        allParcels.push(_parcelId);
+        s_ownerParcels[msg.sender].push(_parcelId);
+        s_allParcels.push(_parcelId);
 
         emit AdParcelCreated(_parcelId, msg.sender, _minBid);
     }
@@ -95,7 +146,7 @@ contract Lemonads {
         uint256 _newBid,
         string calldata _contentHash
     ) external payable {
-        AdParcel storage adParcel = adParcels[_parcelId];
+        AdParcel storage adParcel = s_adParcels[_parcelId];
 
         if (adParcel.owner == address(0)) {
             revert Lemonads__ParcelNotFound();
@@ -105,15 +156,15 @@ contract Lemonads {
             revert Lemonads__BidLowerThanCurrent();
         }
 
-        renterFunds[msg.sender] += msg.value;
+        s_renterFunds[msg.sender] += msg.value;
 
         if (
-            renterFunds[msg.sender] < (adParcel.bid * MIN_CLICK_AMOUNT_COVERED)
+            s_renterFunds[msg.sender] <
+            (adParcel.bid * MIN_CLICK_AMOUNT_COVERED)
         ) {
             revert Lemonads__UnsufficientFundsLocked();
         }
 
-        // Remove the parcel from the previous renter's list if applicable
         if (adParcel.renter != address(0)) {
             _removeAdRentedParcel(adParcel.renter, _parcelId);
         }
@@ -121,7 +172,7 @@ contract Lemonads {
         adParcel.bid = _newBid;
         adParcel.renter = msg.sender;
         adParcel.contentHash = _contentHash;
-        renterParcels[msg.sender].push(_parcelId);
+        s_renterParcels[msg.sender].push(_parcelId);
 
         emit AdParcelRented(_parcelId, msg.sender, _newBid);
     }
@@ -131,7 +182,7 @@ contract Lemonads {
         uint256 _parcelId,
         string calldata _traitsHash
     ) external onlyAdParcelOwner(_parcelId) {
-        adParcels[_parcelId].traitsHash = _traitsHash;
+        s_adParcels[_parcelId].traitsHash = _traitsHash;
 
         emit TraitsUpdated(_parcelId, _traitsHash);
     }
@@ -141,7 +192,7 @@ contract Lemonads {
         uint256 _parcelId,
         string calldata _websiteInfoHash
     ) external onlyAdParcelOwner(_parcelId) {
-        adParcels[_parcelId].websiteInfoHash = _websiteInfoHash;
+        s_adParcels[_parcelId].websiteInfoHash = _websiteInfoHash;
 
         emit WebsiteInfoUpdated(_parcelId, _websiteInfoHash);
     }
@@ -151,7 +202,7 @@ contract Lemonads {
         uint256 _parcelId,
         uint256 _minBid
     ) external onlyAdParcelOwner(_parcelId) {
-        adParcels[_parcelId].minBid = _minBid;
+        s_adParcels[_parcelId].minBid = _minBid;
 
         emit MinBidUpdated(_parcelId, _minBid);
     }
@@ -162,18 +213,18 @@ contract Lemonads {
             revert Lemonads__NotZero();
         }
 
-        renterFunds[msg.sender] += msg.value;
+        s_renterFunds[msg.sender] += msg.value;
 
         emit FundsAdded(msg.sender, msg.value);
     }
 
     // Function to withdraw funds from the renter's account
     function withdrawFunds(uint256 _amount) external {
-        if (_amount > renterFunds[msg.sender]) {
+        if (_amount > s_renterFunds[msg.sender]) {
             revert Lemonads__UnsufficientFundsLocked();
         }
 
-        renterFunds[msg.sender] -= _amount;
+        s_renterFunds[msg.sender] -= _amount;
 
         (bool success, ) = msg.sender.call{value: _amount}("");
         if (!success) {
@@ -186,11 +237,99 @@ contract Lemonads {
     function closeParcel(
         uint256 _parcelId
     ) external onlyAdParcelOwner(_parcelId) {
-        AdParcel storage adParcel = adParcels[_parcelId];
+        AdParcel storage adParcel = s_adParcels[_parcelId];
         adParcel.active = false;
         adParcel.bid = 0;
         adParcel.renter = address(0);
         adParcel.websiteInfoHash = "";
+    }
+
+    function runClickAggregatorCron() external {
+        if (
+            block.timestamp <
+            s_lastCronExecutionTime + MIN_INTERVAL_BETWEEN_CRON
+        ) {
+            revert Lemonads__NotEnoughTimePassed();
+        }
+
+        string[] memory requestArgs;
+
+        requestArgs[0] = s_lastCronExecutionTime.toString();
+
+        s_lastCronExecutionTime = block.timestamp;
+
+        _generateSendRequest(requestArgs, s_clickAggregatorSource);
+    }
+
+    function payParcelOwners() external {
+        if (s_payableParcels.length == 0) {
+            revert Lemonads__NoPayableParcel();
+        }
+
+        uint256[] memory payableParcels = s_payableParcels;
+
+        for (uint256 i = 0; i < payableParcels.length; i++) {
+            uint256 adParcelId = payableParcels[i];
+
+            uint256 clickAggregated = s_clickPerAdParcel[adParcelId];
+
+            AdParcel storage adParcel = s_adParcels[adParcelId];
+
+            uint256 amountDue = adParcel.bid * clickAggregated;
+
+            s_clickPerAdParcel[adParcelId] = 0;
+
+            (bool success, ) = adParcel.owner.call{value: amountDue}("");
+
+            if (!success) {
+                emit ParcelPaymentFailed(adParcelId);
+            }
+        }
+
+        delete s_payableParcels;
+    }
+
+    ////////////////////
+    // Internal
+    ////////////////////
+
+    function _generateSendRequest(
+        string[] memory args,
+        string memory source
+    ) internal returns (bytes32 requestId) {
+        FunctionsRequest.Request memory req;
+        req.initializeRequestForInlineJavaScript(source);
+        req.secretsLocation = FunctionsRequest.Location.DONHosted;
+        if (args.length > 0) {
+            req.setArgs(args);
+        }
+
+        s_lastRequestId = _sendRequest(
+            req.encodeCBOR(),
+            s_functionsSubId,
+            s_gasLimit,
+            s_donID
+        );
+
+        emit ChainlinkRequestSent(s_lastRequestId);
+        return s_lastRequestId;
+    }
+
+    function fulfillRequest(
+        bytes32 requestId,
+        bytes memory response,
+        bytes memory err
+    ) internal override {
+        ClickPerAd[] memory clickPerAds = abi.decode(response, (ClickPerAd[]));
+
+        for (uint256 i = 0; i < clickPerAds.length; i++) {
+            uint256 adParcelId = clickPerAds[i].adParcelId;
+            s_clickPerAdParcel[adParcelId] += clickPerAds[i].clicks;
+            s_payableParcels.push(adParcelId);
+        }
+
+        s_lastRequestIdFulfilled = requestId;
+        emit ClickAggregated(requestId);
     }
 
     // Internal function to remove a parcel from the renter's list
@@ -198,7 +337,7 @@ contract Lemonads {
         address _renter,
         uint256 _parcelId
     ) internal {
-        uint256[] storage parcels = renterParcels[_renter];
+        uint256[] storage parcels = s_renterParcels[_renter];
         for (uint256 i = 0; i < parcels.length; i++) {
             if (parcels[i] == _parcelId) {
                 parcels[i] = parcels[parcels.length - 1];
@@ -209,7 +348,7 @@ contract Lemonads {
     }
 
     function _ensureAdParcelOwnership(uint256 _parcelId) internal view {
-        if (adParcels[_parcelId].owner != msg.sender) {
+        if (s_adParcels[_parcelId].owner != msg.sender) {
             revert Lemonads__NotParcelOwner();
         }
     }
@@ -217,56 +356,66 @@ contract Lemonads {
     function getAdParcelById(
         uint256 _parcelId
     ) external view returns (AdParcel memory) {
-        return adParcels[_parcelId];
+        return s_adParcels[_parcelId];
     }
 
     // Function to get all parcels owned by a user
     function getOwnerParcels(
         address _owner
     ) external view returns (uint256[] memory) {
-        return ownerParcels[_owner];
+        return s_ownerParcels[_owner];
     }
 
     // Function to get all parcels rented by a user
     function getRenterParcels(
         address _renter
     ) external view returns (uint256[] memory) {
-        return renterParcels[_renter];
+        return s_renterParcels[_renter];
     }
 
     // Function to get all parcels globally
     function getAllParcels() external view returns (uint256[] memory) {
-        return allParcels;
+        return s_allParcels;
     }
 
     function getParcelTraitsHash(
         uint256 _parcelId
     ) external view returns (string memory) {
-        return adParcels[_parcelId].traitsHash;
+        return s_adParcels[_parcelId].traitsHash;
     }
 
     // Function to get the website info hash of a specific ad parcel
     function getWebsiteInfoHash(
         uint256 _parcelId
     ) external view returns (string memory) {
-        return adParcels[_parcelId].websiteInfoHash;
+        return s_adParcels[_parcelId].websiteInfoHash;
     }
 
     // Function to get the content hash of a specific ad parcel
     function getContentHash(
         uint256 _parcelId
     ) external view returns (string memory) {
-        return adParcels[_parcelId].contentHash;
+        return s_adParcels[_parcelId].contentHash;
     }
 
     // Function to check if a specific ad parcel is active
     function isParcelActive(uint256 _parcelId) external view returns (bool) {
-        return adParcels[_parcelId].active;
+        return s_adParcels[_parcelId].active;
     }
 
     function getRenterFundsAmount(
         address _renter
     ) external view returns (uint256) {
-        return renterFunds[_renter];
+        return s_renterFunds[_renter];
+    }
+
+    function getClickPerAdParcel(
+        uint256 _adParcelId
+    ) external view returns (uint256) {
+        return s_clickPerAdParcel[_adParcelId];
+    }
+
+    function getPayableAdParcels() external view returns (uint256[] memory) {
+        return s_payableParcels;
     }
 }

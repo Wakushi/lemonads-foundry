@@ -24,7 +24,7 @@ const ReturnType = {
 function getSourceConfig() {
   return {
     source: fs
-      .readFileSync("./functions/sources/firebase-source.js")
+      .readFileSync("./functions/sources/click-aggregator-source.js")
       .toString(),
     args: ["1724629303"],
   }

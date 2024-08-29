@@ -39,7 +39,7 @@ contract HelperConfig is Script {
                 functionsRouter: 0xC22a79eBA640940ABB6dF0f7982cc119578E11De,
                 nativeUsdPriceFeed: 0x001382149eBa3441043c1c66972b4772963f5D43,
                 usdcPriceFeed: 0x1b8739bB4CdF0089d07097A9Ae5Bd274b29C6F16,
-                functionsSubId: 279,
+                functionsSubId: 341,
                 ccipRouterAddress: 0x9C32fCB86BF0f4a1A8921a9Fe46de3198bb884B2,
                 linkTokenAddress: 0x0Fd9e8d3aF1aaee056EB9e802c3A762a667b1904,
                 usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582

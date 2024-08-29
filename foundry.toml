@@ -2,7 +2,7 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-remappings = ["@chainlink/contracts=lib/chainlink/contracts", "@solmate/=lib/solmate/src/"]
+remappings = ["@chainlink/contracts=lib/chainlink/contracts","@openzeppelin=lib/openzeppelin-contracts", "@solmate/=lib/solmate/src/"]
 ffi = true
 fs_permissions = [{ access = "read", path = "./" }]
 optimizer = true
