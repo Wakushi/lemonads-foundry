@@ -11,6 +11,8 @@ import "forge-std/console.sol";
 contract DeployLemonads is Script {
     string constant CLICK_AGGREGATOR_SOURCE =
         "./functions/sources/click-aggregator-source.js";
+    string constant NOTIFICATION_SOURCE =
+        "./functions/sources/notification-source.js";
 
     function run() external {
         IGetLemonadsReturnTypes.GetLemonadsReturnType
@@ -21,7 +23,9 @@ contract DeployLemonads is Script {
             lemonadsReturnType.functionsRouter,
             lemonadsReturnType.donId,
             lemonadsReturnType.functionsSubId,
-            lemonadsReturnType.clickAggregatorSource
+            lemonadsReturnType.clickAggregatorSource,
+            lemonadsReturnType.notificationSource,
+            lemonadsReturnType.secretReference
         );
         IFunctionsSubscriptions(lemonadsReturnType.functionsRouter).addConsumer(
                 lemonadsReturnType.functionsSubId,
@@ -43,12 +47,15 @@ contract DeployLemonads is Script {
             ,
             ,
             ,
-
+            ,
+            bytes memory secretReference
         ) = helperConfig.activeNetworkConfig();
 
         string memory clickAggregatorSource = vm.readFile(
             CLICK_AGGREGATOR_SOURCE
         );
+
+        string memory notificationSource = vm.readFile(NOTIFICATION_SOURCE);
 
         if (
             functionsRouter == address(0) ||
@@ -63,7 +70,9 @@ contract DeployLemonads is Script {
                 functionsRouter,
                 donId,
                 functionsSubId,
-                clickAggregatorSource
+                clickAggregatorSource,
+                notificationSource,
+                secretReference
             );
     }
 
@@ -71,13 +80,17 @@ contract DeployLemonads is Script {
         address _functionsRouter,
         bytes32 _donId,
         uint64 _functionsSubId,
-        string memory _clickAggregatorSource
+        string memory _clickAggregatorSource,
+        string memory _notificationSource,
+        bytes memory _secretReference
     ) public returns (address) {
         Lemonads newLemonads = new Lemonads(
             _functionsRouter,
             _donId,
             _functionsSubId,
-            _clickAggregatorSource
+            _clickAggregatorSource,
+            _notificationSource,
+            _secretReference
         );
         return address(newLemonads);
     }

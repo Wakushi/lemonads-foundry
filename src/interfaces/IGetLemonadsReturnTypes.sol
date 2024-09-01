@@ -7,5 +7,7 @@ interface IGetLemonadsReturnTypes {
         bytes32 donId;
         uint64 functionsSubId;
         string clickAggregatorSource;
+        string notificationSource;
+        bytes secretReference;
     }
 }
