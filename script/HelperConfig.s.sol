@@ -16,6 +16,7 @@ contract HelperConfig is Script {
         address linkTokenAddress;
         address usdcAddress;
         address usdcPriceFeed;
+        bytes secretReference;
     }
 
     uint256 public constant DEFAULT_ANVIL_KEY =
@@ -44,7 +45,8 @@ contract HelperConfig is Script {
                 functionsSubId: 162,
                 ccipRouterAddress: 0x9C32fCB86BF0f4a1A8921a9Fe46de3198bb884B2,
                 linkTokenAddress: 0xE4aB69C077896252FAFBD49EFD26B5D171A32410,
-                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582
+                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582,
+                secretReference: "0xa266736c6f744964006776657273696f6e1a66d46ec0"
             });
     }
 
@@ -58,7 +60,8 @@ contract HelperConfig is Script {
                 functionsSubId: 341,
                 ccipRouterAddress: 0x9C32fCB86BF0f4a1A8921a9Fe46de3198bb884B2,
                 linkTokenAddress: 0x0Fd9e8d3aF1aaee056EB9e802c3A762a667b1904,
-                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582
+                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582,
+                secretReference: "0x"
             });
     }
 
@@ -84,7 +87,8 @@ contract HelperConfig is Script {
                 functionsSubId: 0,
                 ccipRouterAddress: 0x9C32fCB86BF0f4a1A8921a9Fe46de3198bb884B2,
                 linkTokenAddress: address(link),
-                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582
+                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582,
+                secretReference: "0x"
             });
     }
 }

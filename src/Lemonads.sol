@@ -5,10 +5,16 @@ pragma solidity ^0.8.20;
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Lemonads is FunctionsClient {
+contract Lemonads is FunctionsClient, Ownable {
     using FunctionsRequest for FunctionsRequest.Request;
     using Strings for uint256;
+
+    enum ChainlinkRequestType {
+        AGGREGATE_CLICKS,
+        NOTIFY_RENTER
+    }
 
     struct AdParcel {
         uint256 bid; // Current highest bid for the ad parcel
@@ -60,11 +66,19 @@ contract Lemonads is FunctionsClient {
 
     string s_clickAggregatorSource;
 
+    string s_notificationSource;
+
     bytes32 s_lastRequestId;
 
     bytes32 s_lastRequestIdFulfilled;
 
     uint256 s_lastCronExecutionTime;
+
+    uint256 s_requestUUID;
+
+    bytes s_secretReference;
+
+    mapping(bytes32 requestId => ChainlinkRequestType requestType) s_requestTypes;
 
     // Errors
     error Lemonads__ParcelAlreadyCreatedAtId(uint256 parcelId);
@@ -76,6 +90,7 @@ contract Lemonads is FunctionsClient {
     error Lemonads__NotParcelOwner();
     error Lemonads__NotEnoughTimePassed();
     error Lemonads__NoPayableParcel();
+    error Lemonads__NotificationListEmpty();
 
     // Events
     event AdParcelCreated(
@@ -102,6 +117,13 @@ contract Lemonads is FunctionsClient {
         address indexed renter,
         uint256 indexed renterFunds
     );
+    event LowFunds(
+        uint256 indexed adParcelId,
+        address indexed renter,
+        uint256 indexed renterFunds
+    );
+    event RenterNotified(bytes32 requestId);
+    event SentRequestForNotifications();
 
     modifier onlyAdParcelOwner(uint256 _parcelId) {
         _ensureAdParcelOwnership(_parcelId);
@@ -112,11 +134,15 @@ contract Lemonads is FunctionsClient {
         address _functionsRouter,
         bytes32 _donId,
         uint64 _functionsSubId,
-        string memory _clickAggregatorSource
-    ) FunctionsClient(_functionsRouter) {
+        string memory _clickAggregatorSource,
+        string memory _notificationSource,
+        bytes memory _secretReference
+    ) FunctionsClient(_functionsRouter) Ownable(msg.sender) {
         s_donID = _donId;
         s_functionsSubId = _functionsSubId;
         s_clickAggregatorSource = _clickAggregatorSource;
+        s_notificationSource = _notificationSource;
+        s_secretReference = _secretReference;
     }
 
     // Function to create a new ad parcel
@@ -252,12 +278,14 @@ contract Lemonads is FunctionsClient {
     }
 
     function aggregateClicks() external {
-        if (
-            block.timestamp <
-            s_lastCronExecutionTime + MIN_INTERVAL_BETWEEN_CRON
-        ) {
-            revert Lemonads__NotEnoughTimePassed();
-        }
+        // DISABLED FOR TESTING PURPOSES
+
+        // if (
+        //     block.timestamp <
+        //     s_lastCronExecutionTime + MIN_INTERVAL_BETWEEN_CRON
+        // ) {
+        //     revert Lemonads__NotEnoughTimePassed();
+        // }
 
         string[] memory requestArgs = new string[](1);
 
@@ -265,7 +293,11 @@ contract Lemonads is FunctionsClient {
 
         s_lastCronExecutionTime = block.timestamp;
 
-        _generateSendRequest(requestArgs, s_clickAggregatorSource);
+        _generateSendRequest(
+            requestArgs,
+            s_clickAggregatorSource,
+            ChainlinkRequestType.AGGREGATE_CLICKS
+        );
     }
 
     // Triggered manually or using log based automation
@@ -275,6 +307,10 @@ contract Lemonads is FunctionsClient {
         }
 
         uint256[] memory payableParcels = s_payableParcels;
+
+        string[] memory notificationList = new string[](
+            payableParcels.length + 1
+        );
 
         for (uint256 i = 0; i < payableParcels.length; i++) {
             // Retrieve the ad parcel ID
@@ -321,6 +357,17 @@ contract Lemonads is FunctionsClient {
                     emit RenterRemovedFromParcel(adParcelId);
                 }
 
+                // If the new funds are less than 2 times the expected amount of click covered, send a notification
+                if (
+                    newExpectedFundAmount <
+                    adParcel.bid * MIN_CLICK_AMOUNT_COVERED * 2
+                ) {
+                    notificationList[i] = Strings.toHexString(
+                        uint256(uint160(adParcel.renter)),
+                        20
+                    );
+                }
+
                 emit AdParcelPaid(
                     adParcelId,
                     adParcel.renter,
@@ -338,6 +385,26 @@ contract Lemonads is FunctionsClient {
         }
 
         delete s_payableParcels;
+
+        if (notificationList.length > 0) {
+            s_requestUUID++;
+            notificationList[payableParcels.length] = s_requestUUID.toString();
+            notifyRenters(notificationList);
+        }
+    }
+
+    function notifyRenters(string[] memory _notificationList) internal {
+        if (_notificationList.length == 0) {
+            revert Lemonads__NotificationListEmpty();
+        }
+
+        _generateSendRequest(
+            _notificationList,
+            s_notificationSource,
+            ChainlinkRequestType.NOTIFY_RENTER
+        );
+
+        emit SentRequestForNotifications();
     }
 
     ////////////////////
@@ -353,14 +420,16 @@ contract Lemonads is FunctionsClient {
     }
 
     function _generateSendRequest(
-        string[] memory args,
-        string memory source
+        string[] memory _args,
+        string memory _source,
+        ChainlinkRequestType _requestType
     ) internal returns (bytes32 requestId) {
         FunctionsRequest.Request memory req;
-        req.initializeRequestForInlineJavaScript(source);
+        req.initializeRequestForInlineJavaScript(_source);
         req.secretsLocation = FunctionsRequest.Location.DONHosted;
-        if (args.length > 0) {
-            req.setArgs(args);
+        req.encryptedSecretsReference = s_secretReference;
+        if (_args.length > 0) {
+            req.setArgs(_args);
         }
 
         s_lastRequestId = _sendRequest(
@@ -369,6 +438,8 @@ contract Lemonads is FunctionsClient {
             s_gasLimit,
             s_donID
         );
+
+        s_requestTypes[s_lastRequestId] = _requestType;
 
         emit ChainlinkRequestSent(s_lastRequestId);
         return s_lastRequestId;
@@ -385,20 +456,30 @@ contract Lemonads is FunctionsClient {
         bytes memory response,
         bytes memory err
     ) internal override {
-        ClicksPerAd[] memory clicksPerAds = abi.decode(
-            response,
-            (ClicksPerAd[])
-        );
+        ChainlinkRequestType requestType = s_requestTypes[requestId];
 
-        for (uint256 i = 0; i < clicksPerAds.length; i++) {
-            uint256 adParcelId = clicksPerAds[i].adParcelId;
-            s_clicksPerAdParcel[adParcelId] += clicksPerAds[i].clicks;
-            s_payableParcels.push(adParcelId);
+        if (requestType == ChainlinkRequestType.AGGREGATE_CLICKS) {
+            ClicksPerAd[] memory clicksPerAds = abi.decode(
+                response,
+                (ClicksPerAd[])
+            );
+
+            for (uint256 i = 0; i < clicksPerAds.length; i++) {
+                uint256 adParcelId = clicksPerAds[i].adParcelId;
+                s_clicksPerAdParcel[adParcelId] += clicksPerAds[i].clicks;
+                s_payableParcels.push(adParcelId);
+            }
+
+            s_lastRequestIdFulfilled = requestId;
+
+            emit ClickAggregated(requestId);
+
+            return;
         }
 
-        s_lastRequestIdFulfilled = requestId;
-
-        emit ClickAggregated(requestId); // Triggers log based automation ?
+        if (requestType == ChainlinkRequestType.NOTIFY_RENTER) {
+            emit RenterNotified(requestId);
+        }
     }
 
     // Internal function to remove a parcel from the renter's list
@@ -490,5 +571,11 @@ contract Lemonads is FunctionsClient {
 
     function getLastCronTimestamp() external view returns (uint256) {
         return s_lastCronExecutionTime;
+    }
+
+    function updateSecretReference(
+        bytes calldata _secretReference
+    ) external onlyOwner {
+        s_secretReference = _secretReference;
     }
 }
