@@ -6,6 +6,7 @@ import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/Fu
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 contract Lemonads is FunctionsClient, Ownable {
     using FunctionsRequest for FunctionsRequest.Request;
@@ -57,6 +58,9 @@ contract Lemonads is FunctionsClient, Ownable {
     // Parcel expecting payments
     uint256[] private s_payableParcels;
 
+    // Chainlink Data Feed
+    AggregatorV3Interface private s_priceFeed;
+
     // Chainlink Functions
     bytes32 s_donID;
 
@@ -91,6 +95,7 @@ contract Lemonads is FunctionsClient, Ownable {
     error Lemonads__NotEnoughTimePassed();
     error Lemonads__NoPayableParcel();
     error Lemonads__NotificationListEmpty();
+    error Lemonads__AddressZero();
 
     // Events
     event AdParcelCreated(
@@ -136,22 +141,29 @@ contract Lemonads is FunctionsClient, Ownable {
         uint64 _functionsSubId,
         string memory _clickAggregatorSource,
         string memory _notificationSource,
-        bytes memory _secretReference
+        bytes memory _secretReference,
+        address _nativeToUsdpriceFeed
     ) FunctionsClient(_functionsRouter) Ownable(msg.sender) {
         s_donID = _donId;
         s_functionsSubId = _functionsSubId;
         s_clickAggregatorSource = _clickAggregatorSource;
         s_notificationSource = _notificationSource;
         s_secretReference = _secretReference;
+        s_priceFeed = AggregatorV3Interface(_nativeToUsdpriceFeed);
     }
 
     // Function to create a new ad parcel
     function createAdParcel(
         uint256 _parcelId,
         uint256 _minBid,
+        address _owner,
         string calldata _traitsHash,
         string calldata _websiteInfoHash
     ) external {
+        if (_owner == address(0)) {
+            revert Lemonads__AddressZero();
+        }
+
         if (s_adParcels[_parcelId].owner != address(0)) {
             revert Lemonads__ParcelAlreadyCreatedAtId(_parcelId);
         }
@@ -159,7 +171,7 @@ contract Lemonads is FunctionsClient, Ownable {
         s_adParcels[_parcelId] = AdParcel({
             bid: 0,
             minBid: _minBid,
-            owner: msg.sender,
+            owner: _owner,
             renter: address(0),
             active: true,
             traitsHash: _traitsHash,
@@ -167,10 +179,10 @@ contract Lemonads is FunctionsClient, Ownable {
             contentHash: ""
         });
 
-        s_ownerParcels[msg.sender].push(_parcelId);
+        s_ownerParcels[_owner].push(_parcelId);
         s_allParcels.push(_parcelId);
 
-        emit AdParcelCreated(_parcelId, msg.sender, _minBid);
+        emit AdParcelCreated(_parcelId, _owner, _minBid);
     }
 
     // Function to place a bid and rent an ad parcel
@@ -577,5 +589,13 @@ contract Lemonads is FunctionsClient, Ownable {
         bytes calldata _secretReference
     ) external onlyOwner {
         s_secretReference = _secretReference;
+    }
+
+    /**
+     * @dev Returns the current price of ETH in USD for dApp frontend usage.
+     */
+    function getEthPrice() external view returns (uint256) {
+        (, int256 price, , , ) = s_priceFeed.latestRoundData();
+        return uint256(price);
     }
 }

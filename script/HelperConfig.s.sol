@@ -40,12 +40,12 @@ contract HelperConfig is Script {
             NetworkConfig({
                 donId: bytes32("fun-base-sepolia-1"),
                 functionsRouter: 0xf9B8fc078197181C841c296C876945aaa425B278,
-                nativeUsdPriceFeed: 0x001382149eBa3441043c1c66972b4772963f5D43,
-                usdcPriceFeed: 0x1b8739bB4CdF0089d07097A9Ae5Bd274b29C6F16,
+                nativeUsdPriceFeed: 0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1,
+                usdcPriceFeed: 0xd30e2101a97dcbAeBCBC04F14C3f624E67A35165,
                 functionsSubId: 162,
                 ccipRouterAddress: 0x9C32fCB86BF0f4a1A8921a9Fe46de3198bb884B2,
                 linkTokenAddress: 0xE4aB69C077896252FAFBD49EFD26B5D171A32410,
-                usdcAddress: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582,
+                usdcAddress: 0x036CbD53842c5426634e7929541eC2318f3dCF7e,
                 secretReference: "0xa266736c6f744964006776657273696f6e1a66d46ec0"
             });
     }

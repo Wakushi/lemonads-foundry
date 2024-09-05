@@ -9,5 +9,6 @@ interface IGetLemonadsReturnTypes {
         string clickAggregatorSource;
         string notificationSource;
         bytes secretReference;
+        address nativeToUsdpriceFeed;
     }
 }

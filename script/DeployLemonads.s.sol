@@ -25,7 +25,8 @@ contract DeployLemonads is Script {
             lemonadsReturnType.functionsSubId,
             lemonadsReturnType.clickAggregatorSource,
             lemonadsReturnType.notificationSource,
-            lemonadsReturnType.secretReference
+            lemonadsReturnType.secretReference,
+            lemonadsReturnType.nativeToUsdpriceFeed
         );
         IFunctionsSubscriptions(lemonadsReturnType.functionsRouter).addConsumer(
                 lemonadsReturnType.functionsSubId,
@@ -42,7 +43,7 @@ contract DeployLemonads is Script {
         (
             bytes32 donId,
             address functionsRouter,
-            ,
+            address nativeToUsdpriceFeed,
             uint64 functionsSubId,
             ,
             ,
@@ -72,7 +73,8 @@ contract DeployLemonads is Script {
                 functionsSubId,
                 clickAggregatorSource,
                 notificationSource,
-                secretReference
+                secretReference,
+                nativeToUsdpriceFeed
             );
     }
 
@@ -82,7 +84,8 @@ contract DeployLemonads is Script {
         uint64 _functionsSubId,
         string memory _clickAggregatorSource,
         string memory _notificationSource,
-        bytes memory _secretReference
+        bytes memory _secretReference,
+        address _nativeToUsdpriceFeed
     ) public returns (address) {
         Lemonads newLemonads = new Lemonads(
             _functionsRouter,
@@ -90,7 +93,8 @@ contract DeployLemonads is Script {
             _functionsSubId,
             _clickAggregatorSource,
             _notificationSource,
-            _secretReference
+            _secretReference,
+            _nativeToUsdpriceFeed
         );
         return address(newLemonads);
     }
