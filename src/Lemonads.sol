@@ -85,6 +85,7 @@ contract Lemonads is FunctionsClient, Ownable {
     mapping(bytes32 requestId => ChainlinkRequestType requestType) s_requestTypes;
 
     // Errors
+
     error Lemonads__ParcelAlreadyCreatedAtId(uint256 parcelId);
     error Lemonads__ParcelNotFound();
     error Lemonads__UnsufficientFundsLocked();
@@ -96,27 +97,36 @@ contract Lemonads is FunctionsClient, Ownable {
     error Lemonads__NoPayableParcel();
     error Lemonads__NotificationListEmpty();
     error Lemonads__AddressZero();
+    error Lemonads__NotParcelRenter();
 
     // Events
-    event AdParcelCreated(
-        uint256 indexed parcelId,
-        address indexed owner,
-        uint256 minBid
-    );
-    event MinBidUpdated(uint256 indexed parcelId, uint256 newMinBid);
-    event TraitsUpdated(uint256 indexed parcelId, string traitsHash);
-    event WebsiteInfoUpdated(uint256 indexed parcelId, string websiteInfoHash);
-    event AdParcelRented(
-        uint256 indexed parcelId,
-        address indexed renter,
-        uint256 bid
-    );
+
+    event RenterNotified(bytes32 requestId);
+    event SentRequestForNotifications();
     event FundsAdded(address indexed renter, uint256 amount);
     event FundsWithdrawn(address indexed renter, uint256 amount);
     event ChainlinkRequestSent(bytes32 requestId);
     event ClickAggregated(bytes32 requestId);
     event ParcelPaymentFailed(uint256 adParcelId);
     event RenterRemovedFromParcel(uint256 adParcelId);
+    event MinBidUpdated(uint256 indexed parcelId, uint256 newMinBid);
+    event TraitsUpdated(uint256 indexed parcelId, string traitsHash);
+    event AdContentUpdated(uint256 indexed parcelId, string contentHash);
+    event WebsiteInfoUpdated(uint256 indexed parcelId, string websiteInfoHash);
+    event AdParcelRented(
+        uint256 indexed parcelId,
+        address indexed renter,
+        uint256 bid
+    );
+    event AdParcelReleased(
+        uint256 indexed parcelId,
+        address indexed prevRenter
+    );
+    event AdParcelCreated(
+        uint256 indexed parcelId,
+        address indexed owner,
+        uint256 minBid
+    );
     event AdParcelPaid(
         uint256 indexed adParcelId,
         address indexed renter,
@@ -127,13 +137,20 @@ contract Lemonads is FunctionsClient, Ownable {
         address indexed renter,
         uint256 indexed renterFunds
     );
-    event RenterNotified(bytes32 requestId);
-    event SentRequestForNotifications();
+
+    // Modifiers
 
     modifier onlyAdParcelOwner(uint256 _parcelId) {
         _ensureAdParcelOwnership(_parcelId);
         _;
     }
+
+    modifier onlyAdParcelRenter(uint256 _parcelId) {
+        _ensureAdParcelRenter(_parcelId);
+        _;
+    }
+
+    // Functions
 
     constructor(
         address _functionsRouter,
@@ -220,6 +237,24 @@ contract Lemonads is FunctionsClient, Ownable {
         s_renterParcels[msg.sender].push(_parcelId);
 
         emit AdParcelRented(_parcelId, msg.sender, _newBid);
+    }
+
+    // Releases the rent for a given ad parcel
+    function releaseParcel(
+        uint256 _parcelId
+    ) external onlyAdParcelRenter(_parcelId) {
+        _freeParcel(_parcelId);
+        emit AdParcelReleased(_parcelId, msg.sender);
+    }
+
+    // Function to update the traits of an ad parcel
+    function updateAdContent(
+        uint256 _parcelId,
+        string calldata _contentHash
+    ) external onlyAdParcelRenter(_parcelId) {
+        s_adParcels[_parcelId].contentHash = _contentHash;
+
+        emit AdContentUpdated(_parcelId, _contentHash);
     }
 
     // Function to update the traits of an ad parcel
@@ -336,8 +371,10 @@ contract Lemonads is FunctionsClient, Ownable {
             // Get the amount due for all clicks * price per click (bid)
             uint256 amountDue = adParcel.bid * clicksAggregated;
 
+            address renter = adParcel.renter;
+
             // Get the ETH amount locked by the renter
-            uint256 renterFunds = s_renterFunds[adParcel.renter];
+            uint256 renterFunds = s_renterFunds[renter];
 
             // We calculate the new fund amount expected after payment
             uint256 newExpectedFundAmount;
@@ -346,7 +383,7 @@ contract Lemonads is FunctionsClient, Ownable {
             if (amountDue > renterFunds) {
                 // Everything he has left will be sent as payment
                 amountDue = renterFunds;
-                s_renterFunds[adParcel.renter] = 0;
+                s_renterFunds[renter] = 0;
 
                 // We remove him from the parcel (+ reputation system ?)
                 _freeParcel(adParcelId);
@@ -357,7 +394,7 @@ contract Lemonads is FunctionsClient, Ownable {
                 newExpectedFundAmount = renterFunds - amountDue;
 
                 // Deduct the funds
-                s_renterFunds[adParcel.renter] -= amountDue;
+                s_renterFunds[renter] -= amountDue;
 
                 // If new fund amount is lower than a certain point, also free the parcel
                 if (
@@ -375,16 +412,12 @@ contract Lemonads is FunctionsClient, Ownable {
                     adParcel.bid * MIN_CLICK_AMOUNT_COVERED * 2
                 ) {
                     notificationList[i] = Strings.toHexString(
-                        uint256(uint160(adParcel.renter)),
+                        uint256(uint160(renter)),
                         20
                     );
                 }
 
-                emit AdParcelPaid(
-                    adParcelId,
-                    adParcel.renter,
-                    newExpectedFundAmount
-                );
+                emit AdParcelPaid(adParcelId, renter, newExpectedFundAmount);
             }
 
             s_clicksPerAdParcel[adParcelId] = 0;
@@ -425,10 +458,10 @@ contract Lemonads is FunctionsClient, Ownable {
 
     function _freeParcel(uint256 _adParcelId) internal {
         AdParcel storage adParcel = s_adParcels[_adParcelId];
+        _removeAdRentedParcel(adParcel.renter, _adParcelId);
         adParcel.renter = address(0);
         adParcel.bid = 0;
         adParcel.contentHash = "";
-        _removeAdRentedParcel(adParcel.renter, _adParcelId);
     }
 
     function _generateSendRequest(
@@ -512,6 +545,12 @@ contract Lemonads is FunctionsClient, Ownable {
     function _ensureAdParcelOwnership(uint256 _parcelId) internal view {
         if (s_adParcels[_parcelId].owner != msg.sender) {
             revert Lemonads__NotParcelOwner();
+        }
+    }
+
+    function _ensureAdParcelRenter(uint256 _parcelId) internal view {
+        if (s_adParcels[_parcelId].renter != msg.sender) {
+            revert Lemonads__NotParcelRenter();
         }
     }
 
