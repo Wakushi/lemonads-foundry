@@ -33,7 +33,4 @@ const encodedData = abiCoder.encode(
   [clicksArray]
 )
 
-console.log("clicksArray: ", clicksArray)
-console.log(encodedData)
-
 return ethers.getBytes(encodedData)
