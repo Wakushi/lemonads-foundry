@@ -20,6 +20,7 @@ Welcome to the **Lemonads** smart contract, a decentralized ad platform built on
 - [Events](#events)
 - [Error Handling](#error-handling)
 - [How to Use](#how-to-use)
+- [Deployed](#deployed)
 
 ---
 
@@ -185,3 +186,15 @@ make deployLemonads ARGS="--network base"
 ```
 
 This contract is designed to make decentralized advertising more accessible and efficient by automating key processes like bidding, payments, and notifications, leveraging Chainlink’s decentralized infrastructure for transparency and security.
+
+# Deployed
+
+## CHAINLINK CRONS
+
+### Aggregate clicks
+
+https://automation.chain.link/base-sepolia/21209483081823356663322472164827408755917060974019223499028362850358406529008
+
+### Pay ad parcel owners
+
+https://automation.chain.link/base-sepolia/81585211095348955229576301214346664747482029634717746752085909777532966859365
